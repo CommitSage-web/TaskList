@@ -1,6 +1,9 @@
 import 'package:parse_server_sdk_flutter/parse_server_sdk_flutter.dart';
 
 class ParseService {
+  // Cache for current user to reduce API calls
+  static ParseUser? _cachedUser;
+
   static Future<void> initializeParse() async {
     const appId = 'CwSBbdU01wKjMU9f5QwAY7ZeIoykY1a75yV0oeJe';
     const clientKey = '6eiH0fFudofqDVxIFysbMt1Pqd1HGHWYMvrrWx02';
@@ -11,85 +14,143 @@ class ParseService {
       serverUrl,
       clientKey: clientKey,
       autoSendSessionId: true,
-      debug: true,
+      debug: false, // Set to false in production
     );
   }
 
-  // 🔹 Sign Up (validate student email)
+  // Sign Up with optional email validation
   static Future<ParseResponse> signUp(String email, String password) async {
+    // Uncomment to enforce student email validation
     // final emailPattern = RegExp(r'^[0-9]{4}[a-z]{2}[0-9]{5}@wilp\.bits-pilani\.ac\.in$');
     // if (!emailPattern.hasMatch(email)) {
-    //   final error = ParseError(code: 400, message: 'Use student email only.');
-    //   return ParseResponse()..error = error;
+    //   return ParseResponse()
+    //     ..error = ParseError(code: 400, message: 'Use student email only.');
     // }
 
     final user = ParseUser(email, password, email);
-    return await user.signUp();
+    final response = await user.signUp();
+
+    if (response.success) {
+      _cachedUser = user;
+    }
+
+    return response;
   }
 
+  // Login
   static Future<ParseUser?> login(String email, String password) async {
     final user = ParseUser(email, password, email);
     final response = await user.login();
-    return response.success ? user : null;
+
+    if (response.success) {
+      _cachedUser = user;
+      return user;
+    }
+
+    return null;
   }
 
-  static Future<ParseUser?> currentUser() async =>
-      await ParseUser.currentUser() as ParseUser?;
+  // Get current user with caching
+  static Future<ParseUser?> currentUser() async {
+    if (_cachedUser != null) return _cachedUser;
 
+    _cachedUser = await ParseUser.currentUser() as ParseUser?;
+    return _cachedUser;
+  }
+
+  // Logout
   static Future<void> logout() async {
     final user = await currentUser();
-    if (user != null) await user.logout();
+    if (user != null) {
+      await user.logout();
+      _cachedUser = null;
+    }
   }
 
-  // 🔹 CRUD
+  // Update user profile
+  static Future<ParseResponse> updateProfile(String displayName) async {
+    final user = await currentUser();
+    if (user == null) {
+      return ParseResponse()
+        ..error = ParseError(code: 401, message: 'No user logged in');
+    }
+
+    user.set('displayName', displayName);
+    final response = await user.save();
+
+    if (response.success) {
+      _cachedUser = user;
+    }
+
+    return response;
+  }
+
+  // Create Task
   static Future<ParseResponse> createTask(String title, String desc) async {
-  // Get the currently logged-in user
-  final user = await ParseUser.currentUser() as ParseUser?;
-
-  // Create a new Task object with user reference
-  final task = ParseObject('Task')
-    ..set('title', title)
-    ..set('description', desc)
-    ..set('user', user)
-    ..setACL(ParseACL(owner: user));
-  // Save the object to Back4App
-  return await task.save();
-}
-
-
-  static Future<List<ParseObject>> getTasks() async {
-    final user = await ParseUser.currentUser() as ParseUser?;
+    final user = await currentUser();
 
     if (user == null) {
-      print("❌ No logged-in user. Cannot fetch tasks.");
-      return [];
+      return ParseResponse()
+        ..error = ParseError(code: 401, message: 'No user logged in');
     }
 
-    final query = QueryBuilder<ParseObject>(ParseObject('Task'))
-      ..whereEqualTo('user', user)
-      ..orderByDescending('createdAt');
+    final task = ParseObject('Task')
+      ..set('title', title)
+      ..set('description', desc)
+      ..set('user', user)
+      ..setACL(ParseACL(owner: user));
 
-    final response = await query.query();
-
-    if (response.success && response.results != null) {
-      return response.results!.cast<ParseObject>();
-    } else {
-      print('❌ Error fetching tasks: ${response.error?.message}');
-      return [];
-    }
+    return await task.save();
   }
 
+  // Get Tasks (optimized with single query)
+  static Future<List<ParseObject>> getTasks() async {
+    final user = await currentUser();
 
-  static Future<void> updateTask(String id, String title, String desc) async {
+    if (user == null) {
+      return [];
+    }
+
+    try {
+      final query = QueryBuilder<ParseObject>(ParseObject('Task'))
+        ..whereEqualTo('user', user)
+        ..orderByDescending('createdAt')
+        ..setLimit(100); // Add limit to prevent loading too many tasks
+
+      final response = await query.query();
+
+      if (response.success && response.results != null) {
+        return response.results!.cast<ParseObject>();
+      }
+    } catch (e) {
+      print('Error fetching tasks: $e');
+    }
+
+    return [];
+  }
+
+  // Update Task
+  static Future<ParseResponse> updateTask(
+    String id,
+    String title,
+    String desc,
+  ) async {
     final task = ParseObject('Task')..objectId = id;
     task
       ..set('title', title)
       ..set('description', desc);
-    await task.save();
+
+    return await task.save();
   }
 
-  static Future<void> deleteTask(String id) async {
+  // Delete Task
+  static Future<ParseResponse> deleteTask(String id) async {
     final task = ParseObject('Task')..objectId = id;
-    await task.delete();
+    return await task.delete();
+  }
+
+  // Clear cache (useful when switching users)
+  static void clearCache() {
+    _cachedUser = null;
   }
 }
