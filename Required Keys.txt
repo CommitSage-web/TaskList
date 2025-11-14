@@ -1,0 +1,5 @@
+Client Key: KvEBFic0EX4BIs4SBOsqjznr8iJAH3NDRLXpjP72
+API URL: https://parseapi.back4app.com
+Application ID: RNkD1AMKI0AgUOY1ORz4vdgqsFCAmmoZlLa2AvNI
+JavaScript Key : yTHDJyQP7JBFaDBdGCh0NOo0FjJlpHN1hCO9kVSL
+.Net Key: 1JYLKSuWgC545M3Q4z1W8bTdJHRPJRzp9HHDUtcF
