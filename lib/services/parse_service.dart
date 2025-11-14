@@ -1,7 +1,6 @@
 import 'package:parse_server_sdk_flutter/parse_server_sdk_flutter.dart';
 
 class ParseService {
-  // Cache for current user to reduce API calls
   static ParseUser? _cachedUser;
 
   static Future<void> initializeParse() async {
@@ -14,26 +13,15 @@ class ParseService {
       serverUrl,
       clientKey: clientKey,
       autoSendSessionId: true,
-      debug: false, // Set to false in production
+      debug: false,
     );
   }
 
-  // Sign Up with optional email validation
+  // Sign Up
   static Future<ParseResponse> signUp(String email, String password) async {
-    // Uncomment to enforce student email validation
-    // final emailPattern = RegExp(r'^[0-9]{4}[a-z]{2}[0-9]{5}@wilp\.bits-pilani\.ac\.in$');
-    // if (!emailPattern.hasMatch(email)) {
-    //   return ParseResponse()
-    //     ..error = ParseError(code: 400, message: 'Use student email only.');
-    // }
-
     final user = ParseUser(email, password, email);
     final response = await user.signUp();
-
-    if (response.success) {
-      _cachedUser = user;
-    }
-
+    if (response.success) _cachedUser = user;
     return response;
   }
 
@@ -41,19 +29,16 @@ class ParseService {
   static Future<ParseUser?> login(String email, String password) async {
     final user = ParseUser(email, password, email);
     final response = await user.login();
-
     if (response.success) {
       _cachedUser = user;
       return user;
     }
-
     return null;
   }
 
-  // Get current user with caching
+  // Current User
   static Future<ParseUser?> currentUser() async {
     if (_cachedUser != null) return _cachedUser;
-
     _cachedUser = await ParseUser.currentUser() as ParseUser?;
     return _cachedUser;
   }
@@ -67,28 +52,30 @@ class ParseService {
     }
   }
 
-  // Update user profile
+  // Update Profile
   static Future<ParseResponse> updateProfile(String displayName) async {
     final user = await currentUser();
     if (user == null) {
       return ParseResponse()
         ..error = ParseError(code: 401, message: 'No user logged in');
     }
-
     user.set('displayName', displayName);
     final response = await user.save();
-
-    if (response.success) {
-      _cachedUser = user;
-    }
-
+    if (response.success) _cachedUser = user;
     return response;
   }
 
-  // Create Task
-  static Future<ParseResponse> createTask(String title, String desc) async {
-    final user = await currentUser();
+  // ===== NEW ENHANCED FEATURES =====
 
+  // Create Task with Priority & Category
+  static Future<ParseResponse> createTask(
+    String title,
+    String desc, {
+    String priority = 'medium',
+    String category = 'General',
+    DateTime? dueDate,
+  }) async {
+    final user = await currentUser();
     if (user == null) {
       return ParseResponse()
         ..error = ParseError(code: 401, message: 'No user logged in');
@@ -97,48 +84,110 @@ class ParseService {
     final task = ParseObject('Task')
       ..set('title', title)
       ..set('description', desc)
+      ..set('priority', priority)
+      ..set('category', category)
+      ..set('isCompleted', false)
       ..set('user', user)
       ..setACL(ParseACL(owner: user));
+
+    if (dueDate != null) {
+      task.set('dueDate', dueDate);
+    }
 
     return await task.save();
   }
 
-  // Get Tasks (optimized with single query)
-  static Future<List<ParseObject>> getTasks() async {
+  // Get Tasks with Filter Options
+  static Future<List<ParseObject>> getTasks({
+    String? filterPriority,
+    String? filterCategory,
+    bool? filterCompleted,
+    String sortBy = 'createdAt',
+  }) async {
     final user = await currentUser();
-
-    if (user == null) {
-      return [];
-    }
+    if (user == null) return [];
 
     try {
       final query = QueryBuilder<ParseObject>(ParseObject('Task'))
         ..whereEqualTo('user', user)
-        ..orderByDescending('createdAt')
-        ..setLimit(100); // Add limit to prevent loading too many tasks
+        ..setLimit(100);
+
+      // Apply filters
+      if (filterPriority != null) {
+        query.whereEqualTo('priority', filterPriority);
+      }
+      if (filterCategory != null) {
+        query.whereEqualTo('category', filterCategory);
+      }
+      if (filterCompleted != null) {
+        query.whereEqualTo('isCompleted', filterCompleted);
+      }
+
+      // Apply sorting
+      if (sortBy == 'dueDate') {
+        query.orderByAscending('dueDate');
+      } else if (sortBy == 'priority') {
+        query.orderByDescending('priority');
+      } else {
+        query.orderByDescending('createdAt');
+      }
 
       final response = await query.query();
-
       if (response.success && response.results != null) {
         return response.results!.cast<ParseObject>();
       }
     } catch (e) {
       print('Error fetching tasks: $e');
     }
-
     return [];
   }
 
-  // Update Task
+  // Search Tasks
+  static Future<List<ParseObject>> searchTasks(String query) async {
+    final user = await currentUser();
+    if (user == null) return [];
+
+    try {
+      final queryBuilder = QueryBuilder<ParseObject>(ParseObject('Task'))
+        ..whereEqualTo('user', user)
+        ..whereContains('title', query, caseSensitive: false)
+        ..orderByDescending('createdAt');
+
+      final response = await queryBuilder.query();
+      return response.success && response.results != null
+          ? response.results!.cast<ParseObject>()
+          : [];
+    } catch (e) {
+      print('Error searching tasks: $e');
+      return [];
+    }
+  }
+
+  // Toggle Task Completion
+  static Future<ParseResponse> toggleTaskCompletion(
+      String id, bool currentStatus) async {
+    final task = ParseObject('Task')..objectId = id;
+    task.set('isCompleted', !currentStatus);
+    return await task.save();
+  }
+
+  // Update Task with all fields
   static Future<ParseResponse> updateTask(
     String id,
     String title,
-    String desc,
-  ) async {
+    String desc, {
+    String? priority,
+    String? category,
+    DateTime? dueDate,
+  }) async {
     final task = ParseObject('Task')..objectId = id;
     task
       ..set('title', title)
       ..set('description', desc);
+
+    if (priority != null) task.set('priority', priority);
+    if (category != null) task.set('category', category);
+    if (dueDate != null) task.set('dueDate', dueDate);
 
     return await task.save();
   }
@@ -149,7 +198,64 @@ class ParseService {
     return await task.delete();
   }
 
-  // Clear cache (useful when switching users)
+  // Get Task Statistics
+  static Future<Map<String, dynamic>> getTaskStats() async {
+    final tasks = await getTasks();
+
+    int total = tasks.length;
+    int completed = tasks.where((t) => t.get<bool>('isCompleted') ?? false).length;
+    int pending = total - completed;
+
+    // Count by priority
+    Map<String, int> byPriority = {
+      'high': 0,
+      'medium': 0,
+      'low': 0,
+    };
+    for (var task in tasks) {
+      String priority = task.get<String>('priority') ?? 'medium';
+      byPriority[priority] = (byPriority[priority] ?? 0) + 1;
+    }
+
+    // Count by category
+    Map<String, int> byCategory = {};
+    for (var task in tasks) {
+      String category = task.get<String>('category') ?? 'General';
+      byCategory[category] = (byCategory[category] ?? 0) + 1;
+    }
+
+    // Count overdue tasks
+    int overdue = 0;
+    for (var task in tasks) {
+      final dueDate = task.get<DateTime>('dueDate');
+      final isCompleted = task.get<bool>('isCompleted') ?? false;
+      if (dueDate != null && !isCompleted && dueDate.isBefore(DateTime.now())) {
+        overdue++;
+      }
+    }
+
+    return {
+      'total': total,
+      'completed': completed,
+      'pending': pending,
+      'overdue': overdue,
+      'byPriority': byPriority,
+      'byCategory': byCategory,
+      'completionRate': total > 0 ? (completed / total * 100).toStringAsFixed(1) : '0',
+    };
+  }
+
+  // Get All Categories
+  static Future<List<String>> getCategories() async {
+    final tasks = await getTasks();
+    Set<String> categories = {};
+    for (var task in tasks) {
+      String category = task.get<String>('category') ?? 'General';
+      categories.add(category);
+    }
+    return categories.toList()..sort();
+  }
+
   static void clearCache() {
     _cachedUser = null;
   }
